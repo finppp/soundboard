@@ -4,16 +4,27 @@ import { useEffect, useRef, useState } from "react";
 
 export default function WaveformTrimmer({
   audioBuffer,
+  trimStart,
+  trimEnd,
   onChange,
 }: {
   audioBuffer: AudioBuffer;
+  trimStart: number;
+  trimEnd: number;
   onChange: (start: number, end: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [startFrac, setStartFrac] = useState(0);
-  const [endFrac, setEndFrac] = useState(1);
-  const dragging = useRef<"start" | "end" | null>(null);
   const duration = audioBuffer.duration;
+
+  const [startFrac, setStartFrac] = useState(trimStart / duration);
+  const [endFrac, setEndFrac] = useState(trimEnd / duration);
+  const dragging = useRef<"start" | "end" | null>(null);
+
+  // Sync when parent sets initial trim points (e.g. auto-trim after recording)
+  useEffect(() => {
+    setStartFrac(trimStart / duration);
+    setEndFrac(trimEnd / duration);
+  }, [trimStart, trimEnd, duration]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -37,12 +48,10 @@ export default function WaveformTrimmer({
       ctx.fillRect(i, (H - h) / 2, 1, h);
     }
 
-    // dim unselected regions
     ctx.fillStyle = "rgba(9,9,11,0.65)";
     ctx.fillRect(0, 0, startFrac * W, H);
     ctx.fillRect(endFrac * W, 0, W - endFrac * W, H);
 
-    // handles
     ctx.fillStyle = "#e4e4e7";
     ctx.fillRect(Math.round(startFrac * W) - 1, 0, 2, H);
     ctx.fillRect(Math.round(endFrac * W) - 1, 0, 2, H);
@@ -73,10 +82,6 @@ export default function WaveformTrimmer({
     }
   };
 
-  const onMouseUp = () => {
-    dragging.current = null;
-  };
-
   const fmt = (s: number) => `${s.toFixed(1)}s`;
 
   return (
@@ -88,8 +93,8 @@ export default function WaveformTrimmer({
         className="w-full rounded-lg cursor-col-resize"
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        onMouseUp={() => { dragging.current = null; }}
+        onMouseLeave={() => { dragging.current = null; }}
       />
       <div className="flex justify-between text-[10px] font-mono text-zinc-600">
         <span>{fmt(startFrac * duration)}</span>

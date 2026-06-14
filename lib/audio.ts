@@ -1,3 +1,24 @@
+export function detectTrimPoints(
+  buffer: AudioBuffer,
+  threshold = 0.015,
+  paddingMs = 60
+): { start: number; end: number } {
+  const data = buffer.getChannelData(0);
+  const sr = buffer.sampleRate;
+  const pad = Math.floor((paddingMs / 1000) * sr);
+  let startSample = 0;
+  let endSample = data.length - 1;
+
+  for (let i = 0; i < data.length; i++) {
+    if (Math.abs(data[i]) > threshold) { startSample = Math.max(0, i - pad); break; }
+  }
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (Math.abs(data[i]) > threshold) { endSample = Math.min(data.length - 1, i + pad); break; }
+  }
+
+  return { start: startSample / sr, end: endSample / sr };
+}
+
 export async function decodeAudioFile(blob: Blob): Promise<AudioBuffer> {
   const arrayBuffer = await blob.arrayBuffer();
   const ctx = new AudioContext();

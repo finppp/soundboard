@@ -107,15 +107,25 @@ export default function Soundboard() {
   }, []);
 
   useEffect(() => {
+    const isInput = (e: KeyboardEvent) =>
+      (e.target as HTMLElement).tagName === "INPUT" ||
+      (e.target as HTMLElement).tagName === "TEXTAREA";
+
     const keyMap = new Map(sounds.map((s, i) => [KEYS[i], s]));
     const handler = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === "Backspace" && !isInput(e)) {
+        e.preventDefault();
+        const last = sounds[sounds.length - 1];
+        if (last) deleteSound(last);
+        return;
+      }
       const sound = keyMap.get(e.key.toLowerCase());
       if (sound) play(sound);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sounds, play]);
+  }, [sounds, play, deleteSound]);
 
   const BRICKS_PER_ROW = 3;
   const STAGGER_PX = (176 + 12) / 2;
