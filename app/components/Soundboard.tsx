@@ -4,24 +4,35 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, type DBSound } from "@/lib/supabase";
 
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
+type Mode = "shot" | "hold";
 
 function Brick({
   sound,
   keyLabel,
   isActive,
-  onPlay,
+  mode,
+  onPointerDown,
+  onPointerUp,
+  onPointerLeave,
+  onToggleMode,
   onDelete,
 }: {
   sound: DBSound;
   keyLabel: string;
   isActive: boolean;
-  onPlay: (s: DBSound) => void;
+  mode: Mode;
+  onPointerDown: (s: DBSound) => void;
+  onPointerUp: (s: DBSound) => void;
+  onPointerLeave: (s: DBSound) => void;
+  onToggleMode: (id: string) => void;
   onDelete: (s: DBSound) => void;
 }) {
   return (
     <div className="group relative">
       <button
-        onClick={() => onPlay(sound)}
+        onPointerDown={() => onPointerDown(sound)}
+        onPointerUp={() => onPointerUp(sound)}
+        onPointerLeave={() => onPointerLeave(sound)}
         style={{
           borderColor: isActive ? "#e4e4e7" : "#52525b",
           transform: isActive ? "translateY(4px)" : "translateY(0)",
@@ -34,12 +45,25 @@ function Brick({
         >
           {sound.name}
         </span>
+
+        {/* Mode toggle — bottom left */}
+        <span
+          role="button"
+          onClick={(e) => { e.stopPropagation(); onToggleMode(sound.id); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          className="absolute bottom-1.5 left-2.5 text-[10px] font-mono text-zinc-700 hover:text-zinc-400 transition-colors select-none"
+        >
+          {mode}
+        </span>
+
         {keyLabel && (
           <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
             {keyLabel}
           </span>
         )}
       </button>
+
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(sound); }}
         className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-500 text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-zinc-200 hover:border-zinc-500 transition-opacity"
@@ -50,52 +74,100 @@ function Brick({
   );
 }
 
+function loadModes(): Record<string, Mode> {
+  try { return JSON.parse(localStorage.getItem("sound-modes") ?? "{}"); }
+  catch { return {}; }
+}
+
+function saveModes(modes: Record<string, Mode>) {
+  localStorage.setItem("sound-modes", JSON.stringify(modes));
+}
+
 export default function Soundboard() {
   const [sounds, setSounds] = useState<DBSound[]>([]);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
+  const [modes, setModes] = useState<Record<string, Mode>>({});
   const audioCache = useRef<Map<string, HTMLAudioElement>>(new Map());
+
+  useEffect(() => {
+    setModes(loadModes());
+  }, []);
 
   useEffect(() => {
     supabase
       .from("sounds")
       .select("*")
       .order("created_at")
-      .then(({ data }) => {
-        if (data) setSounds(data);
-      });
+      .then(({ data }) => { if (data) setSounds(data); });
 
     const channel = supabase
       .channel("sounds-inserts")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "sounds" },
-        (payload) => setSounds((prev) => [...prev, payload.new as DBSound])
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "sounds" },
-        (payload) => setSounds((prev) => prev.filter((s) => s.id !== payload.old.id))
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "sounds" },
+        (payload) => setSounds((prev) => [...prev, payload.new as DBSound]))
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "sounds" },
+        (payload) => setSounds((prev) => prev.filter((s) => s.id !== payload.old.id)))
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  const play = useCallback((sound: DBSound) => {
+  const getAudio = (sound: DBSound) => {
     let audio = audioCache.current.get(sound.id);
     if (!audio) {
       audio = new Audio(sound.url);
       audioCache.current.set(sound.id, audio);
     }
+    return audio;
+  };
+
+  const activate = (id: string) =>
+    setActiveIds((prev) => new Set(prev).add(id));
+
+  const deactivate = (id: string) =>
+    setActiveIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+
+  const playOneShot = useCallback((sound: DBSound) => {
+    const audio = getAudio(sound);
     audio.currentTime = 0;
     audio.play().catch(() => {});
-    setActiveIds((prev) => new Set(prev).add(sound.id));
-    audio.onended = () =>
-      setActiveIds((prev) => {
-        const next = new Set(prev);
-        next.delete(sound.id);
-        return next;
-      });
+    activate(sound.id);
+    audio.onended = () => deactivate(sound.id);
+  }, []);
+
+  const startHold = useCallback((sound: DBSound) => {
+    const audio = getAudio(sound);
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+    activate(sound.id);
+    audio.onended = () => deactivate(sound.id);
+  }, []);
+
+  const stopHold = useCallback((sound: DBSound) => {
+    const audio = audioCache.current.get(sound.id);
+    if (audio) { audio.pause(); audio.currentTime = 0; }
+    deactivate(sound.id);
+  }, []);
+
+  const handlePointerDown = useCallback((sound: DBSound) => {
+    const mode = modes[sound.id] ?? "shot";
+    if (mode === "shot") playOneShot(sound);
+    else startHold(sound);
+  }, [modes, playOneShot, startHold]);
+
+  const handlePointerUp = useCallback((sound: DBSound) => {
+    if ((modes[sound.id] ?? "shot") === "hold") stopHold(sound);
+  }, [modes, stopHold]);
+
+  const handlePointerLeave = useCallback((sound: DBSound) => {
+    if ((modes[sound.id] ?? "shot") === "hold") stopHold(sound);
+  }, [modes, stopHold]);
+
+  const toggleMode = useCallback((id: string) => {
+    setModes((prev) => {
+      const next: Record<string, Mode> = { ...prev, [id]: (prev[id] ?? "shot") === "shot" ? "hold" : "shot" };
+      saveModes(next);
+      return next;
+    });
   }, []);
 
   const deleteSound = useCallback(async (sound: DBSound) => {
@@ -121,11 +193,11 @@ export default function Soundboard() {
         return;
       }
       const sound = keyMap.get(e.key.toLowerCase());
-      if (sound) play(sound);
+      if (sound) playOneShot(sound);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sounds, play, deleteSound]);
+  }, [sounds, playOneShot, deleteSound]);
 
   const BRICKS_PER_ROW = 3;
   const STAGGER_PX = (176 + 12) / 2;
@@ -137,7 +209,7 @@ export default function Soundboard() {
   if (sounds.length === 0) {
     return (
       <p className="text-xs font-mono text-zinc-700 py-8">
-        No sounds yet — add one below.
+        No sounds yet — press space to record.
       </p>
     );
   }
@@ -156,7 +228,11 @@ export default function Soundboard() {
               sound={sound}
               keyLabel={KEYS[rowIndex * BRICKS_PER_ROW + i] ?? ""}
               isActive={activeIds.has(sound.id)}
-              onPlay={play}
+              mode={modes[sound.id] ?? "shot"}
+              onPointerDown={handlePointerDown}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerLeave}
+              onToggleMode={toggleMode}
               onDelete={deleteSound}
             />
           ))}
