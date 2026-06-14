@@ -1,16 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SOUNDS, type Sound } from "../sounds";
+import { supabase, type DBSound } from "@/lib/supabase";
+
+const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
 
 function Brick({
   sound,
+  keyLabel,
   isActive,
   onPlay,
 }: {
-  sound: Sound;
+  sound: DBSound;
+  keyLabel: string;
   isActive: boolean;
-  onPlay: (s: Sound) => void;
+  onPlay: (s: DBSound) => void;
 }) {
   return (
     <button
@@ -23,25 +27,49 @@ function Brick({
     >
       <span
         style={{ color: isActive ? "#e4e4e7" : "#71717a" }}
-        className="text-sm font-semibold tracking-wide transition-colors duration-75"
+        className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
       >
-        {sound.label}
+        {sound.name}
       </span>
-      <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
-        {sound.key}
-      </span>
+      {keyLabel && (
+        <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
+          {keyLabel}
+        </span>
+      )}
     </button>
   );
 }
 
 export default function Soundboard() {
+  const [sounds, setSounds] = useState<DBSound[]>([]);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const audioCache = useRef<Map<string, HTMLAudioElement>>(new Map());
 
-  const play = useCallback((sound: Sound) => {
+  useEffect(() => {
+    supabase
+      .from("sounds")
+      .select("*")
+      .order("created_at")
+      .then(({ data }) => {
+        if (data) setSounds(data);
+      });
+
+    const channel = supabase
+      .channel("sounds-inserts")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "sounds" },
+        (payload) => setSounds((prev) => [...prev, payload.new as DBSound])
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  const play = useCallback((sound: DBSound) => {
     let audio = audioCache.current.get(sound.id);
     if (!audio) {
-      audio = new Audio(sound.src);
+      audio = new Audio(sound.url);
       audioCache.current.set(sound.id, audio);
     }
     audio.currentTime = 0;
@@ -56,7 +84,7 @@ export default function Soundboard() {
   }, []);
 
   useEffect(() => {
-    const keyMap = new Map(SOUNDS.map((s) => [s.key, s]));
+    const keyMap = new Map(sounds.map((s, i) => [KEYS[i], s]));
     const handler = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const sound = keyMap.get(e.key.toLowerCase());
@@ -64,42 +92,42 @@ export default function Soundboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [play]);
+  }, [sounds, play]);
 
   const BRICKS_PER_ROW = 3;
-  const STAGGER_PX = (176 + 12) / 2; // (w-44 + gap-3) / 2
+  const STAGGER_PX = (176 + 12) / 2;
+  const rows: DBSound[][] = [];
+  for (let i = 0; i < sounds.length; i += BRICKS_PER_ROW) {
+    rows.push(sounds.slice(i, i + BRICKS_PER_ROW));
+  }
 
-  const rows: Sound[][] = [];
-  for (let i = 0; i < SOUNDS.length; i += BRICKS_PER_ROW) {
-    rows.push(SOUNDS.slice(i, i + BRICKS_PER_ROW));
+  if (sounds.length === 0) {
+    return (
+      <p className="text-xs font-mono text-zinc-700 py-8">
+        No sounds yet — add one below.
+      </p>
+    );
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-10 p-8">
-      <h1 className="text-xs font-mono tracking-[0.3em] text-zinc-600 uppercase">
-        Soundboard
-      </h1>
-      <div className="flex flex-col gap-3">
-        {rows.map((row, rowIndex) => (
-          <div
-            key={rowIndex}
-            className="flex gap-3"
-            style={{ marginLeft: rowIndex % 2 === 1 ? STAGGER_PX : 0 }}
-          >
-            {row.map((sound) => (
-              <Brick
-                key={sound.id}
-                sound={sound}
-                isActive={activeIds.has(sound.id)}
-                onPlay={play}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
-      <p className="text-xs font-mono text-zinc-700">
-        public/sounds/1.mp3 – 12.mp3
-      </p>
+    <div className="flex flex-col gap-3">
+      {rows.map((row, rowIndex) => (
+        <div
+          key={rowIndex}
+          className="flex gap-3"
+          style={{ marginLeft: rowIndex % 2 === 1 ? STAGGER_PX : 0 }}
+        >
+          {row.map((sound, i) => (
+            <Brick
+              key={sound.id}
+              sound={sound}
+              keyLabel={KEYS[rowIndex * BRICKS_PER_ROW + i] ?? ""}
+              isActive={activeIds.has(sound.id)}
+              onPlay={play}
+            />
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
