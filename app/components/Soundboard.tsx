@@ -10,33 +10,43 @@ function Brick({
   keyLabel,
   isActive,
   onPlay,
+  onDelete,
 }: {
   sound: DBSound;
   keyLabel: string;
   isActive: boolean;
   onPlay: (s: DBSound) => void;
+  onDelete: (s: DBSound) => void;
 }) {
   return (
-    <button
-      onClick={() => onPlay(sound)}
-      style={{
-        borderColor: isActive ? "#e4e4e7" : "#52525b",
-        transform: isActive ? "translateY(4px)" : "translateY(0)",
-      }}
-      className="relative flex flex-col items-center justify-center w-44 h-[4.5rem] rounded-2xl border-[3px] bg-transparent cursor-pointer select-none transition-all duration-75"
-    >
-      <span
-        style={{ color: isActive ? "#e4e4e7" : "#71717a" }}
-        className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
+    <div className="group relative">
+      <button
+        onClick={() => onPlay(sound)}
+        style={{
+          borderColor: isActive ? "#e4e4e7" : "#52525b",
+          transform: isActive ? "translateY(4px)" : "translateY(0)",
+        }}
+        className="relative flex flex-col items-center justify-center w-44 h-[4.5rem] rounded-2xl border-[3px] bg-transparent cursor-pointer select-none transition-all duration-75"
       >
-        {sound.name}
-      </span>
-      {keyLabel && (
-        <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
-          {keyLabel}
+        <span
+          style={{ color: isActive ? "#e4e4e7" : "#71717a" }}
+          className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
+        >
+          {sound.name}
         </span>
-      )}
-    </button>
+        {keyLabel && (
+          <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
+            {keyLabel}
+          </span>
+        )}
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(sound); }}
+        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-500 text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-zinc-200 hover:border-zinc-500 transition-opacity"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -61,6 +71,11 @@ export default function Soundboard() {
         { event: "INSERT", schema: "public", table: "sounds" },
         (payload) => setSounds((prev) => [...prev, payload.new as DBSound])
       )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "sounds" },
+        (payload) => setSounds((prev) => prev.filter((s) => s.id !== payload.old.id))
+      )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -81,6 +96,14 @@ export default function Soundboard() {
         next.delete(sound.id);
         return next;
       });
+  }, []);
+
+  const deleteSound = useCallback(async (sound: DBSound) => {
+    const filename = sound.url.split("/").pop();
+    if (filename) await supabase.storage.from("sounds").remove([filename]);
+    await supabase.from("sounds").delete().eq("id", sound.id);
+    setSounds((prev) => prev.filter((s) => s.id !== sound.id));
+    audioCache.current.delete(sound.id);
   }, []);
 
   useEffect(() => {
@@ -124,6 +147,7 @@ export default function Soundboard() {
               keyLabel={KEYS[rowIndex * BRICKS_PER_ROW + i] ?? ""}
               isActive={activeIds.has(sound.id)}
               onPlay={play}
+              onDelete={deleteSound}
             />
           ))}
         </div>
