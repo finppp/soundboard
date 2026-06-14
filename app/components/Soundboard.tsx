@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, type DBSound } from "@/lib/supabase";
 
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
+const MAJOR_CHORD = [0, 4, 7]; // root, major third, perfect fifth
 type Mode = "shot" | "hold";
 
 function hash(id: string) {
@@ -14,13 +15,13 @@ function hash(id: string) {
 
 function brickVariant(id: string) {
   const h = hash(id);
-  const rotate = (((h & 0xff) / 255) * 2.8 - 1.4).toFixed(2);   // -1.4 to +1.4 deg
-  const extraH  = ((h >> 4) & 0xf) % 16 - 6;                     // -6 to +9 px
-  const radius  = 14 + ((h >> 8) & 0xf) % 10;                    // 14 to 23 px
+  const rotate = (((h & 0xff) / 255) * 2.8 - 1.4).toFixed(2);
+  const extraH  = ((h >> 4) & 0xf) % 16 - 6;
+  const radius  = 14 + ((h >> 8) & 0xf) % 10;
   return { rotate: Number(rotate), extraH, radius };
 }
 
-const SEMITONES_PER_PX = 12 / 60; // 60px per octave
+const SEMITONES_PER_PX = 12 / 60;
 const DRAG_THRESHOLD = 6;
 
 function octaveLabel(semitones: number) {
@@ -30,26 +31,16 @@ function octaveLabel(semitones: number) {
 }
 
 function Brick({
-  sound,
-  keyLabel,
-  isActive,
-  mode,
-  transpose,
-  onPlayShot,
-  onHoldStart,
-  onHoldEnd,
-  onTransposeFinal,
-  onToggleMode,
-  onDelete,
+  sound, keyLabel, isActive, mode, transpose,
+  onPlayShot, onPlayChord, onHoldStart, onHoldEnd,
+  onTransposeFinal, onToggleMode, onDelete,
 }: {
-  sound: DBSound;
-  keyLabel: string;
-  isActive: boolean;
-  mode: Mode;
-  transpose: number;
+  sound: DBSound; keyLabel: string; isActive: boolean;
+  mode: Mode; transpose: number;
   onPlayShot: (s: DBSound) => void;
-  onHoldStart: (s: DBSound) => void;
-  onHoldEnd: (s: DBSound) => void;
+  onPlayChord: (s: DBSound) => void;
+  onHoldStart: (s: DBSound, chord: boolean) => void;
+  onHoldEnd: (s: DBSound, chord: boolean) => void;
   onTransposeFinal: (id: string, semitones: number) => void;
   onToggleMode: (id: string) => void;
   onDelete: (s: DBSound) => void;
@@ -58,38 +49,38 @@ function Brick({
   const [liveSemitones, setLiveSemitones] = useState(transpose);
   const { rotate, extraH, radius } = brickVariant(sound.id);
 
-  const startRef = useRef<{ y: number; semitones: number } | null>(null);
+  const startRef     = useRef<{ y: number; semitones: number } | null>(null);
   const isDraggingRef = useRef(false);
   const holdActiveRef = useRef(false);
+  const chordRef      = useRef(false);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     startRef.current = { y: e.clientY, semitones: transpose };
     isDraggingRef.current = false;
+    chordRef.current = e.shiftKey;
     setLiveSemitones(transpose);
 
     if (mode === "hold") {
-      onHoldStart(sound);
+      onHoldStart(sound, e.shiftKey);
       holdActiveRef.current = true;
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!startRef.current) return;
-    const dy = startRef.current.y - e.clientY; // up = positive
-
+    const dy = startRef.current.y - e.clientY;
     if (Math.abs(dy) >= DRAG_THRESHOLD) {
       if (!isDraggingRef.current) {
         isDraggingRef.current = true;
-        // cancel hold if drag starts
         if (holdActiveRef.current) {
-          onHoldEnd(sound);
+          onHoldEnd(sound, chordRef.current);
           holdActiveRef.current = false;
         }
         setDragging(true);
       }
       const raw = startRef.current.semitones + dy * SEMITONES_PER_PX;
-      const snapped = Math.round(raw / 12) * 12; // snap to whole octaves
+      const snapped = Math.round(raw / 12) * 12;
       setLiveSemitones(Math.max(-24, Math.min(24, snapped)));
     }
   };
@@ -98,9 +89,10 @@ function Brick({
     if (isDraggingRef.current) {
       onTransposeFinal(sound.id, liveSemitones);
     } else {
-      if (mode === "shot") onPlayShot(sound);
-      if (mode === "hold" && holdActiveRef.current) {
-        onHoldEnd(sound);
+      if (mode === "shot") {
+        chordRef.current ? onPlayChord(sound) : onPlayShot(sound);
+      } else if (mode === "hold" && holdActiveRef.current) {
+        onHoldEnd(sound, chordRef.current);
         holdActiveRef.current = false;
       }
     }
@@ -137,7 +129,6 @@ function Brick({
           </span>
         )}
 
-        {/* mode toggle — bottom left */}
         <span
           role="button"
           onClick={(e) => { e.stopPropagation(); onToggleMode(sound.id); }}
@@ -148,7 +139,6 @@ function Brick({
           {mode}
         </span>
 
-        {/* transpose indicator — shows only when non-zero and not dragging */}
         {!dragging && transpose !== 0 && (
           <span className="absolute top-1.5 left-2.5 text-[9px] font-mono text-zinc-700">
             {octaveLabel(transpose)}
@@ -182,7 +172,8 @@ export default function Soundboard() {
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const [modes, setModes] = useState<Record<string, Mode>>({});
   const [transposes, setTransposes] = useState<Record<string, number>>({});
-  const audioCache = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const audioCache  = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const chordAudios = useRef<HTMLAudioElement[]>([]);
 
   useEffect(() => {
     setModes(loadStorage("sound-modes", {}));
@@ -190,33 +181,26 @@ export default function Soundboard() {
   }, []);
 
   useEffect(() => {
-    supabase
-      .from("sounds")
-      .select("*")
-      .order("created_at")
+    supabase.from("sounds").select("*").order("created_at")
       .then(({ data }) => { if (data) setSounds(data); });
 
-    const channel = supabase
-      .channel("sounds-realtime")
+    const channel = supabase.channel("sounds-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "sounds" },
-        (payload) => setSounds((prev) => [...prev, payload.new as DBSound]))
+        (p) => setSounds((prev) => [...prev, p.new as DBSound]))
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "sounds" },
-        (payload) => setSounds((prev) => prev.filter((s) => s.id !== payload.old.id)))
+        (p) => setSounds((prev) => prev.filter((s) => s.id !== p.old.id)))
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, []);
 
   const getAudio = (sound: DBSound) => {
-    let audio = audioCache.current.get(sound.id);
-    if (!audio) {
-      audio = new Audio(sound.url);
-      audioCache.current.set(sound.id, audio);
-    }
-    return audio;
+    let a = audioCache.current.get(sound.id);
+    if (!a) { a = new Audio(sound.url); audioCache.current.set(sound.id, a); }
+    return a;
   };
 
-  const activate = (id: string) => setActiveIds((p) => new Set(p).add(id));
+  const activate   = (id: string) => setActiveIds((p) => new Set(p).add(id));
   const deactivate = (id: string) =>
     setActiveIds((p) => { const n = new Set(p); n.delete(id); return n; });
 
@@ -233,13 +217,35 @@ export default function Soundboard() {
     playWithRate(sound, transposes[sound.id] ?? 0);
   }, [transposes, playWithRate]);
 
-  const onHoldStart = useCallback((sound: DBSound) => {
-    playWithRate(sound, transposes[sound.id] ?? 0);
-  }, [transposes, playWithRate]);
+  const onPlayChord = useCallback((sound: DBSound) => {
+    const base = transposes[sound.id] ?? 0;
+    // Stop any previous chord voices
+    chordAudios.current.forEach((a) => { a.pause(); a.currentTime = 0; });
+    const voices = MAJOR_CHORD.map((interval) => {
+      const a = new Audio(sound.url);
+      a.playbackRate = Math.pow(2, (base + interval) / 12);
+      a.play().catch(() => {});
+      return a;
+    });
+    chordAudios.current = voices;
+    activate(sound.id);
+    // Deactivate once root voice ends
+    voices[0].onended = () => deactivate(sound.id);
+  }, [transposes]);
 
-  const onHoldEnd = useCallback((sound: DBSound) => {
-    const audio = audioCache.current.get(sound.id);
-    if (audio) { audio.pause(); audio.currentTime = 0; }
+  const onHoldStart = useCallback((sound: DBSound, chord: boolean) => {
+    if (chord) onPlayChord(sound);
+    else playWithRate(sound, transposes[sound.id] ?? 0);
+  }, [transposes, playWithRate, onPlayChord]);
+
+  const onHoldEnd = useCallback((sound: DBSound, chord: boolean) => {
+    if (chord) {
+      chordAudios.current.forEach((a) => { a.pause(); a.currentTime = 0; });
+      chordAudios.current = [];
+    } else {
+      const audio = audioCache.current.get(sound.id);
+      if (audio) { audio.pause(); audio.currentTime = 0; }
+    }
     deactivate(sound.id);
   }, []);
 
@@ -267,8 +273,7 @@ export default function Soundboard() {
   const toggleMode = useCallback((id: string) => {
     setModes((prev) => {
       const next: Record<string, Mode> = {
-        ...prev,
-        [id]: (prev[id] ?? "shot") === "shot" ? "hold" : "shot",
+        ...prev, [id]: (prev[id] ?? "shot") === "shot" ? "hold" : "shot",
       };
       localStorage.setItem("sound-modes", JSON.stringify(next));
       return next;
@@ -306,11 +311,13 @@ export default function Soundboard() {
         return;
       }
       const sound = keyMap.get(e.key.toLowerCase());
-      if (sound) onPlayShot(sound);
+      if (sound) {
+        e.shiftKey ? onPlayChord(sound) : onPlayShot(sound);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sounds, onPlayShot, deleteSound]);
+  }, [sounds, onPlayShot, onPlayChord, deleteSound]);
 
   const BRICKS_PER_ROW = 3;
   const STAGGER_PX = (176 + 12) / 2;
@@ -330,9 +337,7 @@ export default function Soundboard() {
   return (
     <div className="flex flex-col gap-3">
       {rows.map((row, rowIndex) => (
-        <div
-          key={rowIndex}
-          className="flex gap-3"
+        <div key={rowIndex} className="flex gap-3"
           style={{ marginLeft: rowIndex % 2 === 1 ? STAGGER_PX : 0 }}
         >
           {row.map((sound, i) => (
@@ -344,6 +349,7 @@ export default function Soundboard() {
               mode={modes[sound.id] ?? "shot"}
               transpose={transposes[sound.id] ?? 0}
               onPlayShot={onPlayShot}
+              onPlayChord={onPlayChord}
               onHoldStart={onHoldStart}
               onHoldEnd={onHoldEnd}
               onTransposeFinal={onTransposeFinal}
