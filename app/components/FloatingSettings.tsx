@@ -24,13 +24,13 @@ function applyTheme(id: ThemeId) {
 }
 
 function currentTheme(): ThemeId {
-  return (localStorage.getItem("theme") ?? "dark") as ThemeId;
+  return (localStorage.getItem("theme") ?? "moron") as ThemeId;
 }
 
 export default function FloatingSettings() {
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeId>(() => {
-    if (typeof window === "undefined") return "dark";
+    if (typeof window === "undefined") return "moron";
     return currentTheme();
   });
 

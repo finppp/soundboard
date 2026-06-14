@@ -15,20 +15,21 @@ function hash(id: string) {
 }
 
 function brickVariant(id: string) {
-  const h = hash(id);
-  const rotate = (((h & 0xff) / 255) * 2.8 - 1.4).toFixed(2);
-  const extraH  = ((h >> 4) & 0xf) % 16 - 6;
-  const radius  = 14 + ((h >> 8) & 0xf) % 10;
-  return { rotate: Number(rotate), extraH, radius };
+  const h  = hash(id);
+  const h2 = (h * 1103515245 + 12345) & 0xffff; // extend for more bits
+  const rotate = ((h & 0xff) / 255) * 10 - 5;    // ±5°
+  const extraH = ((h >> 4) & 0xff) % 44 - 16;    // -16 to +27px
+  const radius = 6 + ((h >> 8) & 0xff) % 32;     // 6–37px
+  const extraW = (h2 % 64) - 28;                 // -28 to +35px
+  return { rotate: Number(rotate.toFixed(2)), extraH, radius, extraW };
 }
 
 const SEMITONES_PER_PX = 12 / 60;
 const DRAG_THRESHOLD = 6;
 
-function octaveLabel(semitones: number) {
-  const oct = semitones / 12;
-  if (oct === 0) return "0";
-  return (oct > 0 ? "+" : "") + oct + " oct";
+function semitoneLabel(st: number) {
+  if (st === 0) return "0 st";
+  return (st > 0 ? "+" : "") + st + " st";
 }
 
 function Brick({
@@ -48,7 +49,7 @@ function Brick({
 }) {
   const [dragging, setDragging] = useState(false);
   const [liveSemitones, setLiveSemitones] = useState(transpose);
-  const { rotate, extraH, radius } = brickVariant(sound.id);
+  const { rotate, extraH, radius, extraW } = brickVariant(sound.id);
 
   const startRef      = useRef<{ y: number; semitones: number } | null>(null);
   const isDraggingRef = useRef(false);
@@ -81,8 +82,7 @@ function Brick({
         setDragging(true);
       }
       const raw = startRef.current.semitones + dy * SEMITONES_PER_PX;
-      const snapped = Math.round(raw / 12) * 12;
-      setLiveSemitones(Math.max(-24, Math.min(24, snapped)));
+      setLiveSemitones(Math.max(-24, Math.min(24, Math.round(raw))));
     }
   };
 
@@ -116,16 +116,17 @@ function Brick({
           borderStyle: "solid",
           transform: `rotate(${rotate}deg) translateY(${isActive && !dragging ? 4 : 0}px)`,
           cursor: dragging ? "ns-resize" : "pointer",
+          width: `${176 + extraW}px`,
           height: `${72 + extraH}px`,
           borderRadius: `${radius}px`,
           background: "transparent",
         }}
-        className="relative flex flex-col items-center justify-center w-44 select-none transition-colors duration-75"
+        className="relative flex flex-col items-center justify-center select-none transition-colors duration-75"
       >
         {dragging ? (
           <span className="text-base font-mono font-bold"
             style={{ color: "var(--c-brick-text-active)" }}>
-            {octaveLabel(liveSemitones)}
+            {semitoneLabel(liveSemitones)}
           </span>
         ) : (
           <span
@@ -150,7 +151,7 @@ function Brick({
         {!dragging && transpose !== 0 && (
           <span className="absolute top-1.5 left-2.5 text-[9px] font-mono"
             style={{ color: "var(--c-subtext)" }}>
-            {octaveLabel(transpose)}
+            {semitoneLabel(transpose)}
           </span>
         )}
 
