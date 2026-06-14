@@ -18,8 +18,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col bg-zinc-950 text-white">
+    <html lang="en" className={`${geistSans.variable} h-full antialiased theme-dark`}>
+      {/* Restore saved theme before first paint to avoid flash */}
+      <script dangerouslySetInnerHTML={{ __html: `
+        (function(){
+          var t = localStorage.getItem('theme') || 'dark';
+          document.documentElement.className = document.documentElement.className
+            .replace(/\\btheme-\\S+/g, '') + ' theme-' + t;
+        })();
+      ` }} />
+      <body className="min-h-full flex flex-col">
         {children}
       </body>
     </html>

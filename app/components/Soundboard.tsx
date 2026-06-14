@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase, type DBSound } from "@/lib/supabase";
+import { engine } from "@/lib/audioEngine";
 
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
 const MAJOR_CHORD = [0, 4, 7]; // root, major third, perfect fifth
@@ -49,7 +50,7 @@ function Brick({
   const [liveSemitones, setLiveSemitones] = useState(transpose);
   const { rotate, extraH, radius } = brickVariant(sound.id);
 
-  const startRef     = useRef<{ y: number; semitones: number } | null>(null);
+  const startRef      = useRef<{ y: number; semitones: number } | null>(null);
   const isDraggingRef = useRef(false);
   const holdActiveRef = useRef(false);
   const chordRef      = useRef(false);
@@ -108,21 +109,27 @@ function Brick({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         style={{
-          borderColor: isActive ? "#e4e4e7" : "#52525b",
+          borderColor: isActive
+            ? "var(--c-brick-border-active)"
+            : "var(--c-brick-border)",
+          borderWidth: "var(--c-brick-border-width, 3px)",
+          borderStyle: "solid",
           transform: `rotate(${rotate}deg) translateY(${isActive && !dragging ? 4 : 0}px)`,
           cursor: dragging ? "ns-resize" : "pointer",
           height: `${72 + extraH}px`,
           borderRadius: `${radius}px`,
+          background: "transparent",
         }}
-        className="relative flex flex-col items-center justify-center w-44 border-[3px] bg-transparent select-none transition-colors duration-75"
+        className="relative flex flex-col items-center justify-center w-44 select-none transition-colors duration-75"
       >
         {dragging ? (
-          <span className="text-base font-mono font-bold text-zinc-300">
+          <span className="text-base font-mono font-bold"
+            style={{ color: "var(--c-brick-text-active)" }}>
             {octaveLabel(liveSemitones)}
           </span>
         ) : (
           <span
-            style={{ color: isActive ? "#e4e4e7" : "#71717a" }}
+            style={{ color: isActive ? "var(--c-brick-text-active)" : "var(--c-brick-text)" }}
             className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
           >
             {sound.name}
@@ -134,19 +141,22 @@ function Brick({
           onClick={(e) => { e.stopPropagation(); onToggleMode(sound.id); }}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
-          className="absolute bottom-1.5 left-2.5 text-[10px] font-mono text-zinc-700 hover:text-zinc-400 transition-colors"
+          className="absolute bottom-1.5 left-2.5 text-[10px] font-mono hover:opacity-70 transition-opacity"
+          style={{ color: "var(--c-subtext)" }}
         >
           {mode}
         </span>
 
         {!dragging && transpose !== 0 && (
-          <span className="absolute top-1.5 left-2.5 text-[9px] font-mono text-zinc-700">
+          <span className="absolute top-1.5 left-2.5 text-[9px] font-mono"
+            style={{ color: "var(--c-subtext)" }}>
             {octaveLabel(transpose)}
           </span>
         )}
 
         {keyLabel && (
-          <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
+          <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono uppercase"
+            style={{ color: "var(--c-subtext)" }}>
             {keyLabel}
           </span>
         )}
@@ -154,7 +164,12 @@ function Brick({
 
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(sound); }}
-        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-500 text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-zinc-200 hover:border-zinc-500 transition-opacity"
+        style={{
+          backgroundColor: "var(--c-bg)",
+          borderColor: "var(--c-panel-border)",
+          color: "var(--c-brick-text)",
+        }}
+        className="absolute -top-2 -right-2 w-5 h-5 rounded-full border text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 hover:opacity-80 transition-opacity"
       >
         ×
       </button>
@@ -172,13 +187,16 @@ export default function Soundboard() {
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const [modes, setModes] = useState<Record<string, Mode>>({});
   const [transposes, setTransposes] = useState<Record<string, number>>({});
-  const audioCache  = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const chordAudios = useRef<HTMLAudioElement[]>([]);
 
   useEffect(() => {
     setModes(loadStorage("sound-modes", {}));
     setTransposes(loadStorage("sound-transposes", {}));
   }, []);
+
+  // Load all sounds into the audio engine buffer cache
+  useEffect(() => {
+    sounds.forEach((s) => engine.loadBuffer(s.id, s.url));
+  }, [sounds]);
 
   useEffect(() => {
     supabase.from("sounds").select("*").order("created_at")
@@ -186,7 +204,11 @@ export default function Soundboard() {
 
     const channel = supabase.channel("sounds-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "sounds" },
-        (p) => setSounds((prev) => [...prev, p.new as DBSound]))
+        (p) => {
+          const s = p.new as DBSound;
+          setSounds((prev) => [...prev, s]);
+          engine.loadBuffer(s.id, s.url);
+        })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "sounds" },
         (p) => setSounds((prev) => prev.filter((s) => s.id !== p.old.id)))
       .subscribe();
@@ -194,58 +216,48 @@ export default function Soundboard() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  const getAudio = (sound: DBSound) => {
-    let a = audioCache.current.get(sound.id);
-    if (!a) { a = new Audio(sound.url); audioCache.current.set(sound.id, a); }
-    return a;
-  };
-
   const activate   = (id: string) => setActiveIds((p) => new Set(p).add(id));
   const deactivate = (id: string) =>
     setActiveIds((p) => { const n = new Set(p); n.delete(id); return n; });
 
-  const playWithRate = useCallback((sound: DBSound, semitones: number) => {
-    const audio = getAudio(sound);
-    audio.currentTime = 0;
-    audio.playbackRate = Math.pow(2, semitones / 12);
-    audio.play().catch(() => {});
-    activate(sound.id);
-    audio.onended = () => deactivate(sound.id);
-  }, []);
-
   const onPlayShot = useCallback((sound: DBSound) => {
-    playWithRate(sound, transposes[sound.id] ?? 0);
-  }, [transposes, playWithRate]);
+    const semitones = transposes[sound.id] ?? 0;
+    engine.stop(sound.id);
+    engine.play(sound.id, semitones, engine.reverseEnabled, () => deactivate(sound.id));
+    activate(sound.id);
+  }, [transposes]);
 
+  // Chord: play root + major third + perfect fifth simultaneously via the engine.
+  // All 3 sources are started in the same microtask — no latency gap.
   const onPlayChord = useCallback((sound: DBSound) => {
     const base = transposes[sound.id] ?? 0;
-    // Stop any previous chord voices
-    chordAudios.current.forEach((a) => { a.pause(); a.currentTime = 0; });
-    const voices = MAJOR_CHORD.map((interval) => {
-      const a = new Audio(sound.url);
-      a.playbackRate = Math.pow(2, (base + interval) / 12);
-      a.play().catch(() => {});
-      return a;
+    engine.stop(sound.id);
+    MAJOR_CHORD.forEach((interval, i) => {
+      engine.play(
+        sound.id,
+        base + interval,
+        engine.reverseEnabled,
+        i === 0 ? () => deactivate(sound.id) : undefined,
+      );
     });
-    chordAudios.current = voices;
     activate(sound.id);
-    // Deactivate once root voice ends
-    voices[0].onended = () => deactivate(sound.id);
   }, [transposes]);
 
   const onHoldStart = useCallback((sound: DBSound, chord: boolean) => {
-    if (chord) onPlayChord(sound);
-    else playWithRate(sound, transposes[sound.id] ?? 0);
-  }, [transposes, playWithRate, onPlayChord]);
-
-  const onHoldEnd = useCallback((sound: DBSound, chord: boolean) => {
+    const base = transposes[sound.id] ?? 0;
+    engine.stop(sound.id);
     if (chord) {
-      chordAudios.current.forEach((a) => { a.pause(); a.currentTime = 0; });
-      chordAudios.current = [];
+      MAJOR_CHORD.forEach((interval) => {
+        engine.play(sound.id, base + interval, engine.reverseEnabled);
+      });
     } else {
-      const audio = audioCache.current.get(sound.id);
-      if (audio) { audio.pause(); audio.currentTime = 0; }
+      engine.play(sound.id, base, engine.reverseEnabled);
     }
+    activate(sound.id);
+  }, [transposes]);
+
+  const onHoldEnd = useCallback((sound: DBSound) => {
+    engine.stop(sound.id);
     deactivate(sound.id);
   }, []);
 
@@ -293,7 +305,7 @@ export default function Soundboard() {
       }
     } catch { /* best-effort */ }
     setSounds((prev) => prev.filter((s) => s.id !== sound.id));
-    audioCache.current.delete(sound.id);
+    engine.removeBuffer(sound.id);
   }, []);
 
   useEffect(() => {
@@ -328,7 +340,7 @@ export default function Soundboard() {
 
   if (sounds.length === 0) {
     return (
-      <p className="text-xs font-mono text-zinc-700 py-8">
+      <p className="text-xs font-mono py-8" style={{ color: "var(--c-brick-text)" }}>
         No sounds yet — press space to record.
       </p>
     );

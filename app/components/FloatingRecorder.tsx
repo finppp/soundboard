@@ -115,7 +115,9 @@ export default function FloatingRecorder() {
     <div className="fixed bottom-6 right-6 flex flex-col items-end gap-3">
       {/* Expanded panel */}
       {(stage === "trimming" || stage === "uploading") && audioBuffer && (
-        <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-4 w-80 flex flex-col gap-3 shadow-2xl">
+        <div className="rounded-2xl p-4 w-80 flex flex-col gap-3 shadow-2xl border"
+          style={{ backgroundColor: "var(--c-panel-bg)", borderColor: "var(--c-panel-border)" }}
+        >
           {stage === "trimming" && (
             <>
               <WaveformTrimmer
@@ -164,10 +166,11 @@ export default function FloatingRecorder() {
         <button
           onClick={toggle}
           style={{
-            borderColor: stage === "recording" ? "#dc2626" : "#52525b",
-            color: stage === "recording" ? "#dc2626" : "#71717a",
+            borderColor: stage === "recording" ? "#dc2626" : "var(--c-fab-border)",
+            color: stage === "recording" ? "#dc2626" : "var(--c-fab-color)",
+            backgroundColor: "var(--c-bg)",
           }}
-          className={`w-14 h-14 rounded-full border-[3px] bg-zinc-950 flex items-center justify-center text-xl transition-colors ${
+          className={`w-14 h-14 rounded-full border-[3px] flex items-center justify-center text-xl transition-colors ${
             stage === "recording" ? "animate-pulse" : "hover:border-zinc-400 hover:text-zinc-300"
           }`}
         >
