@@ -6,6 +6,20 @@ import { supabase, type DBSound } from "@/lib/supabase";
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
 type Mode = "shot" | "hold";
 
+function hash(id: string) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
+  return h;
+}
+
+function brickVariant(id: string) {
+  const h = hash(id);
+  const rotate = (((h & 0xff) / 255) * 2.8 - 1.4).toFixed(2);   // -1.4 to +1.4 deg
+  const extraH  = ((h >> 4) & 0xf) % 16 - 6;                     // -6 to +9 px
+  const radius  = 14 + ((h >> 8) & 0xf) % 10;                    // 14 to 23 px
+  return { rotate: Number(rotate), extraH, radius };
+}
+
 const SEMITONES_PER_PX = 12 / 60; // 60px per octave
 const DRAG_THRESHOLD = 6;
 
@@ -42,6 +56,7 @@ function Brick({
 }) {
   const [dragging, setDragging] = useState(false);
   const [liveSemitones, setLiveSemitones] = useState(transpose);
+  const { rotate, extraH, radius } = brickVariant(sound.id);
 
   const startRef = useRef<{ y: number; semitones: number } | null>(null);
   const isDraggingRef = useRef(false);
@@ -102,10 +117,12 @@ function Brick({
         onPointerUp={handlePointerUp}
         style={{
           borderColor: isActive ? "#e4e4e7" : "#52525b",
-          transform: isActive && !dragging ? "translateY(4px)" : "translateY(0)",
+          transform: `rotate(${rotate}deg) translateY(${isActive && !dragging ? 4 : 0}px)`,
           cursor: dragging ? "ns-resize" : "pointer",
+          height: `${72 + extraH}px`,
+          borderRadius: `${radius}px`,
         }}
-        className="relative flex flex-col items-center justify-center w-44 h-[4.5rem] rounded-2xl border-[3px] bg-transparent select-none transition-colors duration-75"
+        className="relative flex flex-col items-center justify-center w-44 border-[3px] bg-transparent select-none transition-colors duration-75"
       >
         {dragging ? (
           <span className="text-base font-mono font-bold text-zinc-300">
