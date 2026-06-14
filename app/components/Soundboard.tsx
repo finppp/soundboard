@@ -6,12 +6,13 @@ import { supabase, type DBSound } from "@/lib/supabase";
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
 type Mode = "shot" | "hold";
 
-const SEMITONES_PER_PX = 1 / 18; // drag sensitivity
-const DRAG_THRESHOLD = 6; // px before drag mode kicks in
+const SEMITONES_PER_PX = 12 / 60; // 60px per octave
+const DRAG_THRESHOLD = 6;
 
-function semitoneLabel(n: number) {
-  if (n === 0) return "0";
-  return (n > 0 ? "+" : "") + n;
+function octaveLabel(semitones: number) {
+  const oct = semitones / 12;
+  if (oct === 0) return "0";
+  return (oct > 0 ? "+" : "") + oct + " oct";
 }
 
 function Brick({
@@ -73,7 +74,8 @@ function Brick({
         setDragging(true);
       }
       const raw = startRef.current.semitones + dy * SEMITONES_PER_PX;
-      setLiveSemitones(Math.round(Math.max(-24, Math.min(24, raw))));
+      const snapped = Math.round(raw / 12) * 12; // snap to whole octaves
+      setLiveSemitones(Math.max(-24, Math.min(24, snapped)));
     }
   };
 
@@ -107,8 +109,7 @@ function Brick({
       >
         {dragging ? (
           <span className="text-base font-mono font-bold text-zinc-300">
-            {semitoneLabel(liveSemitones)}
-            <span className="text-xs text-zinc-600"> st</span>
+            {octaveLabel(liveSemitones)}
           </span>
         ) : (
           <span
@@ -133,7 +134,7 @@ function Brick({
         {/* transpose indicator — shows only when non-zero and not dragging */}
         {!dragging && transpose !== 0 && (
           <span className="absolute top-1.5 left-2.5 text-[9px] font-mono text-zinc-700">
-            {semitoneLabel(transpose)}st
+            {octaveLabel(transpose)}
           </span>
         )}
 
