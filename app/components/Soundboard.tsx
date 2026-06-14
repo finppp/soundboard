@@ -171,9 +171,20 @@ export default function Soundboard() {
   }, []);
 
   const deleteSound = useCallback(async (sound: DBSound) => {
-    const filename = sound.url.split("/").pop();
-    if (filename) await supabase.storage.from("sounds").remove([filename]);
-    await supabase.from("sounds").delete().eq("id", sound.id);
+    const { error } = await supabase.from("sounds").delete().eq("id", sound.id);
+    if (error) { console.error("Delete failed:", error.message); return; }
+
+    // Remove from storage — extract path after bucket name
+    try {
+      const url = new URL(sound.url);
+      const marker = "/object/public/sounds/";
+      const idx = url.pathname.indexOf(marker);
+      if (idx !== -1) {
+        const filePath = decodeURIComponent(url.pathname.slice(idx + marker.length));
+        await supabase.storage.from("sounds").remove([filePath]);
+      }
+    } catch { /* storage delete is best-effort */ }
+
     setSounds((prev) => prev.filter((s) => s.id !== sound.id));
     audioCache.current.delete(sound.id);
   }, []);
