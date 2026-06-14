@@ -6,14 +6,24 @@ import { supabase, type DBSound } from "@/lib/supabase";
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
 type Mode = "shot" | "hold";
 
+const SEMITONES_PER_PX = 1 / 18; // drag sensitivity
+const DRAG_THRESHOLD = 6; // px before drag mode kicks in
+
+function semitoneLabel(n: number) {
+  if (n === 0) return "0";
+  return (n > 0 ? "+" : "") + n;
+}
+
 function Brick({
   sound,
   keyLabel,
   isActive,
   mode,
-  onPointerDown,
-  onPointerUp,
-  onPointerLeave,
+  transpose,
+  onPlayShot,
+  onHoldStart,
+  onHoldEnd,
+  onTransposeFinal,
   onToggleMode,
   onDelete,
 }: {
@@ -21,41 +31,111 @@ function Brick({
   keyLabel: string;
   isActive: boolean;
   mode: Mode;
-  onPointerDown: (s: DBSound) => void;
-  onPointerUp: (s: DBSound) => void;
-  onPointerLeave: (s: DBSound) => void;
+  transpose: number;
+  onPlayShot: (s: DBSound) => void;
+  onHoldStart: (s: DBSound) => void;
+  onHoldEnd: (s: DBSound) => void;
+  onTransposeFinal: (id: string, semitones: number) => void;
   onToggleMode: (id: string) => void;
   onDelete: (s: DBSound) => void;
 }) {
+  const [dragging, setDragging] = useState(false);
+  const [liveSemitones, setLiveSemitones] = useState(transpose);
+
+  const startRef = useRef<{ y: number; semitones: number } | null>(null);
+  const isDraggingRef = useRef(false);
+  const holdActiveRef = useRef(false);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    startRef.current = { y: e.clientY, semitones: transpose };
+    isDraggingRef.current = false;
+    setLiveSemitones(transpose);
+
+    if (mode === "hold") {
+      onHoldStart(sound);
+      holdActiveRef.current = true;
+    }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!startRef.current) return;
+    const dy = startRef.current.y - e.clientY; // up = positive
+
+    if (Math.abs(dy) >= DRAG_THRESHOLD) {
+      if (!isDraggingRef.current) {
+        isDraggingRef.current = true;
+        // cancel hold if drag starts
+        if (holdActiveRef.current) {
+          onHoldEnd(sound);
+          holdActiveRef.current = false;
+        }
+        setDragging(true);
+      }
+      const raw = startRef.current.semitones + dy * SEMITONES_PER_PX;
+      setLiveSemitones(Math.round(Math.max(-24, Math.min(24, raw))));
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (isDraggingRef.current) {
+      onTransposeFinal(sound.id, liveSemitones);
+    } else {
+      if (mode === "shot") onPlayShot(sound);
+      if (mode === "hold" && holdActiveRef.current) {
+        onHoldEnd(sound);
+        holdActiveRef.current = false;
+      }
+    }
+    startRef.current = null;
+    isDraggingRef.current = false;
+    setDragging(false);
+  };
+
   return (
     <div className="group relative">
       <button
-        onPointerDown={() => onPointerDown(sound)}
-        onPointerUp={() => onPointerUp(sound)}
-        onPointerLeave={() => onPointerLeave(sound)}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
         style={{
           borderColor: isActive ? "#e4e4e7" : "#52525b",
-          transform: isActive ? "translateY(4px)" : "translateY(0)",
+          transform: isActive && !dragging ? "translateY(4px)" : "translateY(0)",
+          cursor: dragging ? "ns-resize" : "pointer",
         }}
-        className="relative flex flex-col items-center justify-center w-44 h-[4.5rem] rounded-2xl border-[3px] bg-transparent cursor-pointer select-none transition-all duration-75"
+        className="relative flex flex-col items-center justify-center w-44 h-[4.5rem] rounded-2xl border-[3px] bg-transparent select-none transition-colors duration-75"
       >
-        <span
-          style={{ color: isActive ? "#e4e4e7" : "#71717a" }}
-          className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
-        >
-          {sound.name}
-        </span>
+        {dragging ? (
+          <span className="text-base font-mono font-bold text-zinc-300">
+            {semitoneLabel(liveSemitones)}
+            <span className="text-xs text-zinc-600"> st</span>
+          </span>
+        ) : (
+          <span
+            style={{ color: isActive ? "#e4e4e7" : "#71717a" }}
+            className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
+          >
+            {sound.name}
+          </span>
+        )}
 
-        {/* Mode toggle — bottom left */}
+        {/* mode toggle — bottom left */}
         <span
           role="button"
           onClick={(e) => { e.stopPropagation(); onToggleMode(sound.id); }}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
-          className="absolute bottom-1.5 left-2.5 text-[10px] font-mono text-zinc-700 hover:text-zinc-400 transition-colors select-none"
+          className="absolute bottom-1.5 left-2.5 text-[10px] font-mono text-zinc-700 hover:text-zinc-400 transition-colors"
         >
           {mode}
         </span>
+
+        {/* transpose indicator — shows only when non-zero and not dragging */}
+        {!dragging && transpose !== 0 && (
+          <span className="absolute top-1.5 left-2.5 text-[9px] font-mono text-zinc-700">
+            {semitoneLabel(transpose)}st
+          </span>
+        )}
 
         {keyLabel && (
           <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono text-zinc-700 uppercase">
@@ -74,23 +154,21 @@ function Brick({
   );
 }
 
-function loadModes(): Record<string, Mode> {
-  try { return JSON.parse(localStorage.getItem("sound-modes") ?? "{}"); }
-  catch { return {}; }
-}
-
-function saveModes(modes: Record<string, Mode>) {
-  localStorage.setItem("sound-modes", JSON.stringify(modes));
+function loadStorage<T>(key: string, fallback: T): T {
+  try { return JSON.parse(localStorage.getItem(key) ?? "null") ?? fallback; }
+  catch { return fallback; }
 }
 
 export default function Soundboard() {
   const [sounds, setSounds] = useState<DBSound[]>([]);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const [modes, setModes] = useState<Record<string, Mode>>({});
+  const [transposes, setTransposes] = useState<Record<string, number>>({});
   const audioCache = useRef<Map<string, HTMLAudioElement>>(new Map());
 
   useEffect(() => {
-    setModes(loadModes());
+    setModes(loadStorage("sound-modes", {}));
+    setTransposes(loadStorage("sound-transposes", {}));
   }, []);
 
   useEffect(() => {
@@ -101,7 +179,7 @@ export default function Soundboard() {
       .then(({ data }) => { if (data) setSounds(data); });
 
     const channel = supabase
-      .channel("sounds-inserts")
+      .channel("sounds-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "sounds" },
         (payload) => setSounds((prev) => [...prev, payload.new as DBSound]))
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "sounds" },
@@ -120,52 +198,48 @@ export default function Soundboard() {
     return audio;
   };
 
-  const activate = (id: string) =>
-    setActiveIds((prev) => new Set(prev).add(id));
-
+  const activate = (id: string) => setActiveIds((p) => new Set(p).add(id));
   const deactivate = (id: string) =>
-    setActiveIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setActiveIds((p) => { const n = new Set(p); n.delete(id); return n; });
 
-  const playOneShot = useCallback((sound: DBSound) => {
+  const playWithRate = useCallback((sound: DBSound, semitones: number) => {
     const audio = getAudio(sound);
     audio.currentTime = 0;
+    audio.playbackRate = Math.pow(2, semitones / 12);
     audio.play().catch(() => {});
     activate(sound.id);
     audio.onended = () => deactivate(sound.id);
   }, []);
 
-  const startHold = useCallback((sound: DBSound) => {
-    const audio = getAudio(sound);
-    audio.currentTime = 0;
-    audio.play().catch(() => {});
-    activate(sound.id);
-    audio.onended = () => deactivate(sound.id);
-  }, []);
+  const onPlayShot = useCallback((sound: DBSound) => {
+    playWithRate(sound, transposes[sound.id] ?? 0);
+  }, [transposes, playWithRate]);
 
-  const stopHold = useCallback((sound: DBSound) => {
+  const onHoldStart = useCallback((sound: DBSound) => {
+    playWithRate(sound, transposes[sound.id] ?? 0);
+  }, [transposes, playWithRate]);
+
+  const onHoldEnd = useCallback((sound: DBSound) => {
     const audio = audioCache.current.get(sound.id);
     if (audio) { audio.pause(); audio.currentTime = 0; }
     deactivate(sound.id);
   }, []);
 
-  const handlePointerDown = useCallback((sound: DBSound) => {
-    const mode = modes[sound.id] ?? "shot";
-    if (mode === "shot") playOneShot(sound);
-    else startHold(sound);
-  }, [modes, playOneShot, startHold]);
-
-  const handlePointerUp = useCallback((sound: DBSound) => {
-    if ((modes[sound.id] ?? "shot") === "hold") stopHold(sound);
-  }, [modes, stopHold]);
-
-  const handlePointerLeave = useCallback((sound: DBSound) => {
-    if ((modes[sound.id] ?? "shot") === "hold") stopHold(sound);
-  }, [modes, stopHold]);
+  const onTransposeFinal = useCallback((id: string, semitones: number) => {
+    setTransposes((prev) => {
+      const next = { ...prev, [id]: semitones };
+      localStorage.setItem("sound-transposes", JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   const toggleMode = useCallback((id: string) => {
     setModes((prev) => {
-      const next: Record<string, Mode> = { ...prev, [id]: (prev[id] ?? "shot") === "shot" ? "hold" : "shot" };
-      saveModes(next);
+      const next: Record<string, Mode> = {
+        ...prev,
+        [id]: (prev[id] ?? "shot") === "shot" ? "hold" : "shot",
+      };
+      localStorage.setItem("sound-modes", JSON.stringify(next));
       return next;
     });
   }, []);
@@ -173,8 +247,6 @@ export default function Soundboard() {
   const deleteSound = useCallback(async (sound: DBSound) => {
     const { error } = await supabase.from("sounds").delete().eq("id", sound.id);
     if (error) { console.error("Delete failed:", error.message); return; }
-
-    // Remove from storage — extract path after bucket name
     try {
       const url = new URL(sound.url);
       const marker = "/object/public/sounds/";
@@ -183,8 +255,7 @@ export default function Soundboard() {
         const filePath = decodeURIComponent(url.pathname.slice(idx + marker.length));
         await supabase.storage.from("sounds").remove([filePath]);
       }
-    } catch { /* storage delete is best-effort */ }
-
+    } catch { /* best-effort */ }
     setSounds((prev) => prev.filter((s) => s.id !== sound.id));
     audioCache.current.delete(sound.id);
   }, []);
@@ -204,11 +275,11 @@ export default function Soundboard() {
         return;
       }
       const sound = keyMap.get(e.key.toLowerCase());
-      if (sound) playOneShot(sound);
+      if (sound) onPlayShot(sound);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sounds, playOneShot, deleteSound]);
+  }, [sounds, onPlayShot, deleteSound]);
 
   const BRICKS_PER_ROW = 3;
   const STAGGER_PX = (176 + 12) / 2;
@@ -240,9 +311,11 @@ export default function Soundboard() {
               keyLabel={KEYS[rowIndex * BRICKS_PER_ROW + i] ?? ""}
               isActive={activeIds.has(sound.id)}
               mode={modes[sound.id] ?? "shot"}
-              onPointerDown={handlePointerDown}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerLeave}
+              transpose={transposes[sound.id] ?? 0}
+              onPlayShot={onPlayShot}
+              onHoldStart={onHoldStart}
+              onHoldEnd={onHoldEnd}
+              onTransposeFinal={onTransposeFinal}
               onToggleMode={toggleMode}
               onDelete={deleteSound}
             />
