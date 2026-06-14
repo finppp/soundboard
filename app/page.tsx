@@ -1,5 +1,6 @@
 import Soundboard from "./components/Soundboard";
 import FloatingRecorder from "./components/FloatingRecorder";
+import FloatingSettings from "./components/FloatingSettings";
 
 export default function Home() {
   return (
@@ -8,6 +9,7 @@ export default function Home() {
         <Soundboard />
       </div>
       <FloatingRecorder />
+      <FloatingSettings />
     </>
   );
 }

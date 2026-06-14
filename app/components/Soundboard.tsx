@@ -251,6 +251,19 @@ export default function Soundboard() {
     });
   }, []);
 
+  const setAllModes = useCallback((mode: Mode) => {
+    const next: Record<string, Mode> = {};
+    sounds.forEach((s) => { next[s.id] = mode; });
+    localStorage.setItem("sound-modes", JSON.stringify(next));
+    setModes(next);
+  }, [sounds]);
+
+  useEffect(() => {
+    const handler = (e: Event) => setAllModes((e as CustomEvent<Mode>).detail);
+    window.addEventListener("soundboard:set-all-modes", handler);
+    return () => window.removeEventListener("soundboard:set-all-modes", handler);
+  }, [setAllModes]);
+
   const toggleMode = useCallback((id: string) => {
     setModes((prev) => {
       const next: Record<string, Mode> = {
