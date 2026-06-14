@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase, type DBSound } from "@/lib/supabase";
 import { engine } from "@/lib/audioEngine";
 
 const KEYS = "qwertyuiopasdfghjklzxcvbnm".split("");
-const MAJOR_CHORD = [0, 4, 7]; // root, major third, perfect fifth
+const MAJOR_CHORD = [0, 4, 7];
 type Mode = "shot" | "hold";
 
 function hash(id: string) {
@@ -16,106 +16,59 @@ function hash(id: string) {
 
 function brickVariant(id: string) {
   const h  = hash(id);
-  const h2 = (h * 1103515245 + 12345) & 0xffff; // extend for more bits
-  const rotate = ((h & 0xff) / 255) * 10 - 5;    // ±5°
-  const extraH = ((h >> 4) & 0xff) % 44 - 16;    // -16 to +27px
-  const radius = 6 + ((h >> 8) & 0xff) % 32;     // 6–37px
-  const extraW = (h2 % 64) - 28;                 // -28 to +35px
+  const h2 = (h * 1103515245 + 12345) & 0xffff;
+  const rotate = ((h & 0xff) / 255) * 10 - 5;
+  const extraH = ((h >> 4) & 0xff) % 44 - 16;
+  const radius = 6 + ((h >> 8) & 0xff) % 32;
+  const extraW = (h2 % 64) - 28;
   return { rotate: Number(rotate.toFixed(2)), extraH, radius, extraW };
 }
 
-const SEMITONES_PER_PX = 12 / 60;
-const DRAG_THRESHOLD = 6;
-
-function semitoneLabel(st: number) {
-  if (st === 0) return "0 st";
-  return (st > 0 ? "+" : "") + st + " st";
-}
-
-function Brick({
-  sound, keyLabel, isActive, mode, transpose,
+const Brick = memo(function Brick({
+  sound, keyLabel, isActive, mode,
   onPlayShot, onPlayChord, onHoldStart, onHoldEnd,
-  onTransposeFinal, onToggleMode, onDelete,
+  onToggleMode, onDelete,
 }: {
-  sound: DBSound; keyLabel: string; isActive: boolean;
-  mode: Mode; transpose: number;
+  sound: DBSound; keyLabel: string; isActive: boolean; mode: Mode;
   onPlayShot: (s: DBSound) => void;
   onPlayChord: (s: DBSound) => void;
   onHoldStart: (s: DBSound, chord: boolean) => void;
-  onHoldEnd: (s: DBSound, chord: boolean) => void;
-  onTransposeFinal: (id: string, semitones: number) => void;
+  onHoldEnd: (s: DBSound) => void;
   onToggleMode: (id: string) => void;
   onDelete: (s: DBSound) => void;
 }) {
-  const [dragging, setDragging] = useState(false);
-  const [liveSemitones, setLiveSemitones] = useState(transpose);
   const { rotate, extraH, radius, extraW } = brickVariant(sound.id);
-
-  const startRef      = useRef<{ y: number; semitones: number } | null>(null);
-  const isDraggingRef = useRef(false);
   const holdActiveRef = useRef(false);
   const chordRef      = useRef(false);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    startRef.current = { y: e.clientY, semitones: transpose };
-    isDraggingRef.current = false;
     chordRef.current = e.shiftKey;
-    setLiveSemitones(transpose);
-
     if (mode === "hold") {
       onHoldStart(sound, e.shiftKey);
       holdActiveRef.current = true;
     }
   };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!startRef.current) return;
-    const dy = startRef.current.y - e.clientY;
-    if (Math.abs(dy) >= DRAG_THRESHOLD) {
-      if (!isDraggingRef.current) {
-        isDraggingRef.current = true;
-        if (holdActiveRef.current) {
-          onHoldEnd(sound, chordRef.current);
-          holdActiveRef.current = false;
-        }
-        setDragging(true);
-      }
-      const raw = startRef.current.semitones + dy * SEMITONES_PER_PX;
-      setLiveSemitones(Math.max(-24, Math.min(24, Math.round(raw))));
-    }
-  };
-
   const handlePointerUp = () => {
-    if (isDraggingRef.current) {
-      onTransposeFinal(sound.id, liveSemitones);
-    } else {
-      if (mode === "shot") {
-        chordRef.current ? onPlayChord(sound) : onPlayShot(sound);
-      } else if (mode === "hold" && holdActiveRef.current) {
-        onHoldEnd(sound, chordRef.current);
-        holdActiveRef.current = false;
-      }
+    if (mode === "shot") {
+      chordRef.current ? onPlayChord(sound) : onPlayShot(sound);
+    } else if (mode === "hold" && holdActiveRef.current) {
+      onHoldEnd(sound);
+      holdActiveRef.current = false;
     }
-    startRef.current = null;
-    isDraggingRef.current = false;
-    setDragging(false);
   };
 
   return (
     <div className="group relative">
       <button
         onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         style={{
-          borderColor: isActive
-            ? "var(--c-brick-border-active)"
-            : "var(--c-brick-border)",
+          borderColor: isActive ? "var(--c-brick-border-active)" : "var(--c-brick-border)",
           borderWidth: "var(--c-brick-border-width, 3px)",
           borderStyle: "solid",
-          transform: `rotate(${rotate}deg) translateY(${isActive && !dragging ? 4 : 0}px)`,
-          cursor: dragging ? "ns-resize" : "pointer",
+          transform: `rotate(${rotate}deg) translateY(${isActive ? 4 : 0}px)`,
           width: `${176 + extraW}px`,
           height: `${72 + extraH}px`,
           borderRadius: `${radius}px`,
@@ -123,19 +76,12 @@ function Brick({
         }}
         className="relative flex flex-col items-center justify-center select-none transition-colors duration-75"
       >
-        {dragging ? (
-          <span className="text-base font-mono font-bold"
-            style={{ color: "var(--c-brick-text-active)" }}>
-            {semitoneLabel(liveSemitones)}
-          </span>
-        ) : (
-          <span
-            style={{ color: isActive ? "var(--c-brick-text-active)" : "var(--c-brick-text)" }}
-            className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
-          >
-            {sound.name}
-          </span>
-        )}
+        <span
+          style={{ color: isActive ? "var(--c-brick-text-active)" : "var(--c-brick-text)" }}
+          className="text-sm font-semibold tracking-wide transition-colors duration-75 px-2 text-center leading-tight line-clamp-2"
+        >
+          {sound.name}
+        </span>
 
         <span
           role="button"
@@ -147,13 +93,6 @@ function Brick({
         >
           {mode}
         </span>
-
-        {!dragging && transpose !== 0 && (
-          <span className="absolute top-1.5 left-2.5 text-[9px] font-mono"
-            style={{ color: "var(--c-subtext)" }}>
-            {semitoneLabel(transpose)}
-          </span>
-        )}
 
         {keyLabel && (
           <span className="absolute bottom-1.5 right-2.5 text-[10px] font-mono uppercase"
@@ -176,7 +115,7 @@ function Brick({
       </button>
     </div>
   );
-}
+});
 
 function loadStorage<T>(key: string, fallback: T): T {
   try { return JSON.parse(localStorage.getItem(key) ?? "null") ?? fallback; }
@@ -184,24 +123,22 @@ function loadStorage<T>(key: string, fallback: T): T {
 }
 
 export default function Soundboard() {
-  const [sounds, setSounds] = useState<DBSound[]>([]);
+  const [sounds, setSounds]       = useState<DBSound[]>([]);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
-  const [modes, setModes] = useState<Record<string, Mode>>({});
-  const [transposes, setTransposes] = useState<Record<string, number>>({});
+  const [modes, setModes]         = useState<Record<string, Mode>>({});
+  const soundsRef = useRef(sounds);
+  soundsRef.current = sounds;
 
   useEffect(() => {
     setModes(loadStorage("sound-modes", {}));
-    setTransposes(loadStorage("sound-transposes", {}));
   }, []);
 
-  // Load all sounds into the audio engine buffer cache
   useEffect(() => {
-    sounds.forEach((s) => engine.loadBuffer(s.id, s.url));
-  }, [sounds]);
-
-  useEffect(() => {
-    supabase.from("sounds").select("*").order("created_at")
-      .then(({ data }) => { if (data) setSounds(data); });
+    supabase.from("sounds").select("*").order("created_at").then(async ({ data }) => {
+      if (!data) return;
+      setSounds(data);
+      for (const s of data) await engine.loadBuffer(s.id, s.url);
+    });
 
     const channel = supabase.channel("sounds-realtime")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "sounds" },
@@ -217,65 +154,48 @@ export default function Soundboard() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  const activate   = (id: string) => setActiveIds((p) => new Set(p).add(id));
-  const deactivate = (id: string) =>
-    setActiveIds((p) => { const n = new Set(p); n.delete(id); return n; });
+  const activate = useCallback(
+    (id: string) => setActiveIds((p) => new Set(p).add(id)), []);
+  const deactivate = useCallback(
+    (id: string) => setActiveIds((p) => { const n = new Set(p); n.delete(id); return n; }), []);
 
   const onPlayShot = useCallback((sound: DBSound) => {
-    const semitones = transposes[sound.id] ?? 0;
     engine.stop(sound.id);
-    engine.play(sound.id, semitones, engine.reverseEnabled, () => deactivate(sound.id));
+    engine.play(sound.id, 0, engine.reverseEnabled, () => deactivate(sound.id));
     activate(sound.id);
-  }, [transposes]);
+  }, [activate, deactivate]);
 
-  // Chord: play root + major third + perfect fifth simultaneously via the engine.
-  // All 3 sources are started in the same microtask — no latency gap.
   const onPlayChord = useCallback((sound: DBSound) => {
-    const base = transposes[sound.id] ?? 0;
     engine.stop(sound.id);
     MAJOR_CHORD.forEach((interval, i) => {
-      engine.play(
-        sound.id,
-        base + interval,
-        engine.reverseEnabled,
-        i === 0 ? () => deactivate(sound.id) : undefined,
-      );
+      engine.play(sound.id, interval, engine.reverseEnabled,
+        i === 0 ? () => deactivate(sound.id) : undefined);
     });
     activate(sound.id);
-  }, [transposes]);
+  }, [activate, deactivate]);
 
   const onHoldStart = useCallback((sound: DBSound, chord: boolean) => {
-    const base = transposes[sound.id] ?? 0;
     engine.stop(sound.id);
     if (chord) {
-      MAJOR_CHORD.forEach((interval) => {
-        engine.play(sound.id, base + interval, engine.reverseEnabled);
-      });
+      MAJOR_CHORD.forEach((interval) =>
+        engine.play(sound.id, interval, engine.reverseEnabled));
     } else {
-      engine.play(sound.id, base, engine.reverseEnabled);
+      engine.play(sound.id, 0, engine.reverseEnabled);
     }
     activate(sound.id);
-  }, [transposes]);
+  }, [activate]);
 
   const onHoldEnd = useCallback((sound: DBSound) => {
     engine.stop(sound.id);
     deactivate(sound.id);
-  }, []);
-
-  const onTransposeFinal = useCallback((id: string, semitones: number) => {
-    setTransposes((prev) => {
-      const next = { ...prev, [id]: semitones };
-      localStorage.setItem("sound-transposes", JSON.stringify(next));
-      return next;
-    });
-  }, []);
+  }, [deactivate]);
 
   const setAllModes = useCallback((mode: Mode) => {
     const next: Record<string, Mode> = {};
-    sounds.forEach((s) => { next[s.id] = mode; });
+    soundsRef.current.forEach((s) => { next[s.id] = mode; });
     localStorage.setItem("sound-modes", JSON.stringify(next));
     setModes(next);
-  }, [sounds]);
+  }, []);
 
   useEffect(() => {
     const handler = (e: Event) => setAllModes((e as CustomEvent<Mode>).detail);
@@ -314,30 +234,30 @@ export default function Soundboard() {
       (e.target as HTMLElement).tagName === "INPUT" ||
       (e.target as HTMLElement).tagName === "TEXTAREA";
 
-    const keyMap = new Map(sounds.map((s, i) => [KEYS[i], s]));
     const handler = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === "Backspace" && !isInput(e)) {
         e.preventDefault();
-        const last = sounds[sounds.length - 1];
+        const last = soundsRef.current[soundsRef.current.length - 1];
         if (last) deleteSound(last);
         return;
       }
-      const sound = keyMap.get(e.key.toLowerCase());
-      if (sound) {
-        e.shiftKey ? onPlayChord(sound) : onPlayShot(sound);
-      }
+      const sound = soundsRef.current[KEYS.indexOf(e.key.toLowerCase())];
+      if (sound) e.shiftKey ? onPlayChord(sound) : onPlayShot(sound);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [sounds, onPlayShot, onPlayChord, deleteSound]);
+  }, [onPlayShot, onPlayChord, deleteSound]);
 
   const BRICKS_PER_ROW = 3;
   const STAGGER_PX = (176 + 12) / 2;
-  const rows: DBSound[][] = [];
-  for (let i = 0; i < sounds.length; i += BRICKS_PER_ROW) {
-    rows.push(sounds.slice(i, i + BRICKS_PER_ROW));
-  }
+
+  const rows = useMemo(() => {
+    const result: DBSound[][] = [];
+    for (let i = 0; i < sounds.length; i += BRICKS_PER_ROW)
+      result.push(sounds.slice(i, i + BRICKS_PER_ROW));
+    return result;
+  }, [sounds]);
 
   if (sounds.length === 0) {
     return (
@@ -360,12 +280,10 @@ export default function Soundboard() {
               keyLabel={KEYS[rowIndex * BRICKS_PER_ROW + i] ?? ""}
               isActive={activeIds.has(sound.id)}
               mode={modes[sound.id] ?? "shot"}
-              transpose={transposes[sound.id] ?? 0}
               onPlayShot={onPlayShot}
               onPlayChord={onPlayChord}
               onHoldStart={onHoldStart}
               onHoldEnd={onHoldEnd}
-              onTransposeFinal={onTransposeFinal}
               onToggleMode={toggleMode}
               onDelete={deleteSound}
             />
