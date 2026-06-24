@@ -12,4 +12,5 @@ export type DBSound = {
   name: string;
   url: string;
   created_at: string;
+  deleted_at?: string | null;
 };

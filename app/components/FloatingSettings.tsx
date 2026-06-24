@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { supabase, type DBSound } from "@/lib/supabase";
+import { engine } from "@/lib/audioEngine";
 
 type Mode = "shot" | "hold";
 
@@ -33,17 +35,49 @@ export default function FloatingSettings() {
     if (typeof window === "undefined") return "moron";
     return currentTheme();
   });
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archive, setArchive] = useState<DBSound[] | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
 
   const handleTheme = (id: ThemeId) => {
     applyTheme(id);
     setTheme(id);
   };
 
+  const loadArchive = async () => {
+    setArchiveLoading(true);
+    const { data } = await supabase
+      .from("sounds")
+      .select("*")
+      .not("deleted_at", "is", null)
+      .order("deleted_at", { ascending: false });
+    setArchive(data ?? []);
+    setArchiveLoading(false);
+  };
+
+  const toggleArchive = () => {
+    if (!archiveOpen && archive === null) loadArchive();
+    setArchiveOpen((v) => !v);
+  };
+
+  const restoreSound = async (sound: DBSound) => {
+    const { error } = await supabase
+      .from("sounds")
+      .update({ deleted_at: null })
+      .eq("id", sound.id);
+    if (error) { console.error("Restore failed:", error.message); return; }
+    setArchive((prev) => prev?.filter((s) => s.id !== sound.id) ?? null);
+    engine.loadBuffer(sound.id, sound.url);
+  };
+
   return (
-    <div className="fixed bottom-6 left-6 flex flex-col items-start gap-3 z-50">
+    <div
+      className="fixed left-6 flex flex-col items-start gap-3 z-50"
+      style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))" }}
+    >
       {open && (
         <div
-          className="rounded-2xl p-4 flex flex-col gap-4 shadow-2xl w-52 border"
+          className="rounded-2xl p-4 flex flex-col gap-4 shadow-2xl w-52 border max-h-[70vh] overflow-y-auto"
           style={{
             backgroundColor: "var(--c-panel-bg)",
             borderColor: "var(--c-panel-border)",
@@ -102,6 +136,51 @@ export default function FloatingSettings() {
                 {t.label}
               </button>
             ))}
+          </div>
+
+          {/* Archive */}
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={toggleArchive}
+              className="text-left text-[10px] font-mono uppercase tracking-widest flex items-center justify-between"
+              style={{ color: "var(--c-subtext)" }}
+            >
+              <span>Archive</span>
+              <span>{archiveOpen ? "▲" : "▼"}</span>
+            </button>
+
+            {archiveOpen && (
+              <div className="flex flex-col gap-1">
+                {archiveLoading && (
+                  <p className="text-[9px] font-mono" style={{ color: "var(--c-subtext)" }}>
+                    Loading…
+                  </p>
+                )}
+                {!archiveLoading && archive?.length === 0 && (
+                  <p className="text-[9px] font-mono" style={{ color: "var(--c-subtext)" }}>
+                    Nothing archived yet.
+                  </p>
+                )}
+                {archive?.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-mono truncate"
+                      style={{ color: "var(--c-panel-text)" }}>
+                      {s.name}
+                    </span>
+                    <button
+                      onClick={() => restoreSound(s)}
+                      className="text-[9px] font-mono px-1.5 py-0.5 rounded border shrink-0 transition-colors"
+                      style={{
+                        borderColor: "var(--c-panel-border)",
+                        color: "var(--c-panel-text)",
+                      }}
+                    >
+                      restore
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

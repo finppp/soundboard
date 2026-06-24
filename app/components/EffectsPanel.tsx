@@ -43,7 +43,7 @@ function Knob({
         type="range" min={min} max={max} step={step} value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="flex-1 h-1 appearance-none rounded cursor-pointer"
-        style={{ accentColor: "var(--c-brick-border-active)" }}
+        style={{ accentColor: "var(--c-brick-border-active)", touchAction: "none" }}
       />
       <span className="text-[9px] font-mono w-10 text-right shrink-0"
         style={{ color: "var(--c-panel-text)" }}>
@@ -99,7 +99,8 @@ export default function EffectsPanel() {
   const filterTypes: BiquadFilterType[] = ["lowpass", "highpass", "bandpass", "notch"];
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 z-50">
+    <div className="fixed left-1/2 -translate-x-1/2 flex flex-col items-center gap-3 z-50"
+      style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom, 0px))" }}>
       {open && (
         <div
           className="rounded-2xl p-4 shadow-2xl border w-80 max-h-[80vh] overflow-y-auto flex flex-col gap-3"

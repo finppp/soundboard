@@ -24,12 +24,25 @@ function brickVariant(id: string) {
   return { rotate: Number(rotate.toFixed(2)), extraH, radius, extraW };
 }
 
+function useWindowWidth() {
+  const [width, setWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1024
+  );
+  useEffect(() => {
+    const h = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return width;
+}
+
 const Brick = memo(function Brick({
-  sound, keyLabel, isActive, mode,
+  sound, keyLabel, isActive, mode, widthPx,
   onPlayShot, onPlayChord, onHoldStart, onHoldEnd,
   onToggleMode, onDelete,
 }: {
   sound: DBSound; keyLabel: string; isActive: boolean; mode: Mode;
+  widthPx?: number;
   onPlayShot: (s: DBSound) => void;
   onPlayChord: (s: DBSound) => void;
   onHoldStart: (s: DBSound, chord: boolean) => void;
@@ -40,10 +53,23 @@ const Brick = memo(function Brick({
   const { rotate, extraH, radius, extraW } = brickVariant(sound.id);
   const holdActiveRef = useRef(false);
   const chordRef      = useRef(false);
+  const longPressRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const cancelLongPress = () => {
+    if (longPressRef.current) { clearTimeout(longPressRef.current); longPressRef.current = null; }
+  };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     chordRef.current = e.shiftKey;
+
+    longPressRef.current = setTimeout(() => {
+      longPressRef.current = null;
+      if (holdActiveRef.current) { onHoldEnd(sound); holdActiveRef.current = false; }
+      setConfirming(true);
+    }, 600);
+
     if (mode === "hold") {
       onHoldStart(sound, e.shiftKey);
       holdActiveRef.current = true;
@@ -51,6 +77,8 @@ const Brick = memo(function Brick({
   };
 
   const handlePointerUp = () => {
+    cancelLongPress();
+    if (confirming) return;
     if (mode === "shot") {
       chordRef.current ? onPlayChord(sound) : onPlayShot(sound);
     } else if (mode === "hold" && holdActiveRef.current) {
@@ -59,20 +87,26 @@ const Brick = memo(function Brick({
     }
   };
 
+  const handlePointerCancel = () => { cancelLongPress(); };
+
+  const brickW = widthPx ?? (176 + extraW);
+
   return (
     <div className="group relative">
       <button
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         style={{
           borderColor: isActive ? "var(--c-brick-border-active)" : "var(--c-brick-border)",
           borderWidth: "var(--c-brick-border-width, 3px)",
           borderStyle: "solid",
-          transform: `rotate(${rotate}deg) translateY(${isActive ? 4 : 0}px)`,
-          width: `${176 + extraW}px`,
+          transform: `rotate(${widthPx ? 0 : rotate}deg) translateY(${isActive ? 4 : 0}px)`,
+          width: `${brickW}px`,
           height: `${72 + extraH}px`,
           borderRadius: `${radius}px`,
           background: "transparent",
+          touchAction: "none",
         }}
         className="relative flex flex-col items-center justify-center select-none transition-colors duration-75"
       >
@@ -102,17 +136,50 @@ const Brick = memo(function Brick({
         )}
       </button>
 
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(sound); }}
-        style={{
-          backgroundColor: "var(--c-bg)",
-          borderColor: "var(--c-panel-border)",
-          color: "var(--c-brick-text)",
-        }}
-        className="absolute -top-2 -right-2 w-5 h-5 rounded-full border text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 hover:opacity-80 transition-opacity"
-      >
-        ×
-      </button>
+      {/* Delete button — always visible on mobile, hover-only on desktop */}
+      {!confirming && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onDelete(sound); }}
+          style={{
+            backgroundColor: "var(--c-bg)",
+            borderColor: "var(--c-panel-border)",
+            color: "var(--c-brick-text)",
+          }}
+          className="absolute -top-2 -right-2 w-6 h-6 rounded-full border text-[10px] flex items-center justify-center sm:opacity-0 sm:group-hover:opacity-100 hover:opacity-80 transition-opacity"
+        >
+          ×
+        </button>
+      )}
+
+      {/* Long-press delete confirmation */}
+      {confirming && (
+        <div
+          className="absolute inset-0 flex items-center justify-center gap-2 z-10"
+          style={{
+            borderRadius: `${radius}px`,
+            background: "var(--c-panel-bg)",
+            border: `2px solid var(--c-brick-border)`,
+          }}
+        >
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onDelete(sound); setConfirming(false); }}
+            className="text-xs font-mono px-2 py-1 rounded border transition-colors"
+            style={{ borderColor: "var(--c-brick-border)", color: "var(--c-brick-text)" }}
+          >
+            archive
+          </button>
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setConfirming(false); }}
+            className="text-xs font-mono px-2 py-1 rounded border transition-colors"
+            style={{ borderColor: "var(--c-panel-border)", color: "var(--c-subtext)" }}
+          >
+            cancel
+          </button>
+        </div>
+      )}
     </div>
   );
 });
@@ -128,6 +195,8 @@ export default function Soundboard() {
   const [modes, setModes]         = useState<Record<string, Mode>>({});
   const soundsRef = useRef(sounds);
   soundsRef.current = sounds;
+  const windowWidth = useWindowWidth();
+  const isMobile = windowWidth < 640;
 
   useEffect(() => {
     setModes(loadStorage("sound-modes", {}));
@@ -136,8 +205,9 @@ export default function Soundboard() {
   useEffect(() => {
     supabase.from("sounds").select("*").order("created_at").then(async ({ data }) => {
       if (!data) return;
-      setSounds(data);
-      for (const s of data) await engine.loadBuffer(s.id, s.url);
+      const active = data.filter((s) => !s.deleted_at);
+      setSounds(active);
+      for (const s of active) await engine.loadBuffer(s.id, s.url);
     });
 
     const channel = supabase.channel("sounds-realtime")
@@ -147,8 +217,24 @@ export default function Soundboard() {
           setSounds((prev) => [...prev, s]);
           engine.loadBuffer(s.id, s.url);
         })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "sounds" },
+        (p) => {
+          const s = p.new as DBSound;
+          if (s.deleted_at) {
+            setSounds((prev) => prev.filter((x) => x.id !== s.id));
+            engine.removeBuffer(s.id);
+          } else {
+            setSounds((prev) =>
+              prev.find((x) => x.id === s.id) ? prev : [...prev, s]
+            );
+            engine.loadBuffer(s.id, s.url);
+          }
+        })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "sounds" },
-        (p) => setSounds((prev) => prev.filter((s) => s.id !== p.old.id)))
+        (p) => {
+          setSounds((prev) => prev.filter((s) => s.id !== p.old.id));
+          engine.removeBuffer(p.old.id);
+        })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -214,17 +300,15 @@ export default function Soundboard() {
   }, []);
 
   const deleteSound = useCallback(async (sound: DBSound) => {
-    const { error } = await supabase.from("sounds").delete().eq("id", sound.id);
-    if (error) { console.error("Delete failed:", error.message); return; }
-    try {
-      const url = new URL(sound.url);
-      const marker = "/object/public/sounds/";
-      const idx = url.pathname.indexOf(marker);
-      if (idx !== -1) {
-        const filePath = decodeURIComponent(url.pathname.slice(idx + marker.length));
-        await supabase.storage.from("sounds").remove([filePath]);
-      }
-    } catch { /* best-effort */ }
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from("sounds")
+      .update({ deleted_at: now })
+      .eq("id", sound.id);
+    if (error) {
+      console.error("Archive failed:", error.message);
+      return;
+    }
     setSounds((prev) => prev.filter((s) => s.id !== sound.id));
     engine.removeBuffer(sound.id);
   }, []);
@@ -249,15 +333,18 @@ export default function Soundboard() {
     return () => window.removeEventListener("keydown", handler);
   }, [onPlayShot, onPlayChord, deleteSound]);
 
-  const BRICKS_PER_ROW = 3;
-  const STAGGER_PX = (176 + 12) / 2;
+  const bricksPerRow = isMobile ? 2 : 3;
+  const mobileBrickW = isMobile
+    ? Math.floor((windowWidth - 64 - 12) / 2)
+    : undefined;
+  const STAGGER_PX = isMobile ? 0 : (176 + 12) / 2;
 
   const rows = useMemo(() => {
     const result: DBSound[][] = [];
-    for (let i = 0; i < sounds.length; i += BRICKS_PER_ROW)
-      result.push(sounds.slice(i, i + BRICKS_PER_ROW));
+    for (let i = 0; i < sounds.length; i += bricksPerRow)
+      result.push(sounds.slice(i, i + bricksPerRow));
     return result;
-  }, [sounds]);
+  }, [sounds, bricksPerRow]);
 
   if (sounds.length === 0) {
     return (
@@ -277,9 +364,10 @@ export default function Soundboard() {
             <Brick
               key={sound.id}
               sound={sound}
-              keyLabel={KEYS[rowIndex * BRICKS_PER_ROW + i] ?? ""}
+              keyLabel={KEYS[rowIndex * bricksPerRow + i] ?? ""}
               isActive={activeIds.has(sound.id)}
               mode={modes[sound.id] ?? "shot"}
+              widthPx={mobileBrickW}
               onPlayShot={onPlayShot}
               onPlayChord={onPlayChord}
               onHoldStart={onHoldStart}

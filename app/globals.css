@@ -85,4 +85,6 @@ body {
   flex-direction: column;
   font-family: var(--c-font);
   transition: background 0.2s;
+  overscroll-behavior: none;
+  touch-action: manipulation;
 }
